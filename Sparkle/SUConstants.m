@@ -25,6 +25,7 @@ NSString *const SUTechnicalErrorInformationKey = @"SUTechnicalErrorInformation";
 
 NSString *const SUHasLaunchedBeforeKey = @"SUHasLaunchedBefore";
 NSString *const SUFeedURLKey = @"SUFeedURL";
+NSString *const SUFeedAlternateAppNameKey = @"SUFeedAlternateAppNameKey";
 NSString *const SUShowReleaseNotesKey = @"SUShowReleaseNotes";
 NSString *const SUSkippedVersionKey = @"SUSkippedVersion";
 NSString *const SUScheduledCheckIntervalKey = @"SUScheduledCheckInterval";
