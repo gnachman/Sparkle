@@ -42,13 +42,31 @@ static NSString *sUpdateFolder = nil;
         return NO;
 }
 
-+ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr
++ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder
+                      alternateBundleFileName:(NSString *)alternateBundleFileName
+                                      forHost:(SUHost *)host
+                                    isPackage:(BOOL *)isPackagePtr {
+    NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
+    NSString *alternateBundleFileName = [userDefaults stringForKey:SUFeedAlternateAppNameKey];
+    if (!alternateBundleFileName) {
+        alternateBundleFileName = [[host name] stringByAppendingPathExtension:[[host bundlePath] pathExtension]];
+    }
+
+    return [self installSourcePathInUpdateFolder:inUpdateFolder
+                         alternateBundleFileName:alternateBundleFileName
+                                         forHost:host
+                                       isPackage:isPackagePtr];
+}
+
++ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder
+                      alternateBundleFileName:(NSString *)alternateBundleFileName
+                                      forHost:(SUHost *)host
+                                    isPackage:(BOOL *)isPackagePtr
 {
     // Search subdirectories for the application
     NSString *currentFile,
         *newAppDownloadPath = nil,
         *bundleFileName = [[host bundlePath] lastPathComponent],
-        *alternateBundleFileName = [[host name] stringByAppendingPathExtension:[[host bundlePath] pathExtension]];
     BOOL isPackage = NO;
     NSString *fallbackPackagePath = nil;
     NSDirectoryEnumerator *dirEnum = [[NSFileManager defaultManager] enumeratorAtPath:inUpdateFolder];

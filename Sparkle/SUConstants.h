@@ -30,6 +30,7 @@ extern NSString *const SUTechnicalErrorInformationKey;
 // -----------------------------------------------------------------------------
 
 extern NSString *const SUFeedURLKey;
+extern NSString *const SUFeedAlternateAppNameKey;
 extern NSString *const SUHasLaunchedBeforeKey;
 extern NSString *const SUShowReleaseNotesKey;
 extern NSString *const SUSkippedVersionKey;
