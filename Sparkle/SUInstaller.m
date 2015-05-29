@@ -42,10 +42,10 @@ static NSString *sUpdateFolder = nil;
         return NO;
 }
 
-+ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder
-                                      forHost:(SUHost *)host
-                                    isPackage:(BOOL *)isPackagePtr
-                                     isGuided:(BOOL *)isGuidedPtr {
+// georgen's mod:
+// Wraps the method just below, providing an alternateBundleFileName that comes from user defaults (if available), or from the host's name if not.
+// The original logic always used the host's name.
++ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr isGuided:(BOOL *)isGuidedPtr {
     NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
     NSString *alternateBundleFileName = [userDefaults stringForKey:SUFeedAlternateAppNameKey];
     if (!alternateBundleFileName) {
@@ -59,7 +59,7 @@ static NSString *sUpdateFolder = nil;
                                         isGuided:isGuidedPtr];
 }
 
-+ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr isGuided:(BOOL *)isGuidedPtr
++ (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder alternateBundleFileName:(NSString *)alternateBundleFileName forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr isGuided:(BOOL *)isGuidedPtr
 {
     NSParameterAssert(inUpdateFolder);
     NSParameterAssert(host);
