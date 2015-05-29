@@ -67,7 +67,7 @@ static NSString *sUpdateFolder = nil;
     // Search subdirectories for the application
     NSString *currentFile,
         *newAppDownloadPath = nil,
-        *bundleFileName = [[host bundlePath] lastPathComponent],
+        *bundleFileName = [[host bundlePath] lastPathComponent];
     BOOL isPackage = NO;
     BOOL isGuided = NO;
     NSString *fallbackPackagePath = nil;
