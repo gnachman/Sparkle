@@ -9,12 +9,18 @@
 #ifndef SUBINARYDELTACOMMON_H
 #define SUBINARYDELTACOMMON_H
 
+#import <Foundation/Foundation.h>
+
 #include <fts.h>
 
 #define PERMISSION_FLAGS (S_IRWXU | S_IRWXG | S_IRWXO | S_ISUID | S_ISGID | S_ISVTX)
 
 #define IS_VALID_PERMISSIONS(mode) \
     (((mode & PERMISSION_FLAGS) == 0755) || ((mode & PERMISSION_FLAGS) == 0644))
+
+#define APPLE_CODE_SIGN_XATTR_CODE_DIRECTORY_KEY "com.apple.cs.CodeDirectory"
+#define APPLE_CODE_SIGN_XATTR_CODE_REQUIREMENTS_KEY "com.apple.cs.CodeRequirements"
+#define APPLE_CODE_SIGN_XATTR_CODE_SIGNATURE_KEY "com.apple.cs.CodeSignature"
 
 #define BINARY_DELTA_ATTRIBUTES_KEY "binary-delta-attributes"
 #define MAJOR_DIFF_VERSION_KEY "major-version"
@@ -55,16 +61,13 @@ typedef NS_ENUM(uint16_t, SUBinaryDeltaMajorVersion)
 typedef NS_ENUM(uint16_t, SUBinaryDeltaMinorVersion)
 {
     SUAzureMinorVersion = 1,
-    SUBeigeMinorVersion = 0,
+    SUBeigeMinorVersion = 1,
 };
 
 #define FIRST_DELTA_DIFF_MAJOR_VERSION SUAzureMajorVersion
-#define FIRST_DELTA_DIFF_MINOR_VERSION 0
+#define FIRST_DELTA_DIFF_MINOR_VERSION ((SUBinaryDeltaMinorVersion)0)
 
 #define LATEST_DELTA_DIFF_MAJOR_VERSION SUBeigeMajorVersion
-
-@class NSString;
-@class NSData;
 
 extern int compareFiles(const FTSENT **a, const FTSENT **b);
 extern NSData *hashOfFileContents(FTSENT *ent);

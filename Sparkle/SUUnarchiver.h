@@ -9,6 +9,8 @@
 #ifndef SUUNARCHIVER_H
 #define SUUNARCHIVER_H
 
+#import <Foundation/Foundation.h>
+
 @class SUHost;
 @protocol SUUnarchiverDelegate;
 
@@ -16,9 +18,10 @@
 
 @property (copy, readonly) NSString *archivePath;
 @property (copy, readonly) NSString *updateHostBundlePath;
+@property (copy, readonly) NSString *decryptionPassword;
 @property (weak) id<SUUnarchiverDelegate> delegate;
 
-+ (SUUnarchiver *)unarchiverForPath:(NSString *)path updatingHostBundlePath:(NSString *)host;
++ (SUUnarchiver *)unarchiverForPath:(NSString *)path updatingHostBundlePath:(NSString *)host withPassword:(NSString *)decryptionPassword;
 
 - (void)start;
 @end

@@ -11,7 +11,7 @@
 
 #import "SUGuidedPackageInstaller.h"
 
-static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authorization, const char* executablePath, AuthorizationFlags options, const char* const* arguments)
+static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authorization, const char* executablePath, AuthorizationFlags options, char* const* arguments)
 {
 	sig_t oldSigChildHandler = signal(SIGCHLD, SIG_DFL);
 	BOOL returnValue = YES;
@@ -19,7 +19,7 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     /* AuthorizationExecuteWithPrivileges used to support 10.4+; should be replaced with XPC or external process */
-	if (AuthorizationExecuteWithPrivileges(authorization, executablePath, options, (char* const*)arguments, NULL) == errAuthorizationSuccess)
+	if (AuthorizationExecuteWithPrivileges(authorization, executablePath, options, arguments, NULL) == errAuthorizationSuccess)
 #pragma clang diagnostic pop
 	{
 		int status = 0;
@@ -38,7 +38,7 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
 
 + (AuthorizationRef)authorizationForExecutable:(NSString*)executablePath
 {
-	NSParameterAssert(executablePath);
+	SUParameterAssert(executablePath);
 	
 	// Get authorization using advice in Apple's Technical Q&A1172
 	
@@ -52,14 +52,15 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
 	if ((validAuth == errAuthorizationSuccess) &&
 		(auth != NULL))
 	{		
-		const char* executableFileSystemRepresentation = [executablePath fileSystemRepresentation];
+        char executableFileSystemRepresentation[PATH_MAX];
+        [executablePath getFileSystemRepresentation:executableFileSystemRepresentation maxLength:sizeof(executableFileSystemRepresentation)];
 		
 		// Prepare a right allowing script to execute with privileges
-		AuthorizationItem right;
-		memset(&right,0,sizeof(right));
-		right.name = kAuthorizationRightExecute;
-		right.value = (void*) executableFileSystemRepresentation;
-		right.valueLength = strlen(executableFileSystemRepresentation);
+        AuthorizationItem right = {
+            .name = kAuthorizationRightExecute,
+            .value = executableFileSystemRepresentation,
+            .valueLength = strlen(executableFileSystemRepresentation),
+        };
 		
 		// Package up the single right
 		AuthorizationRights rights;
@@ -71,9 +72,10 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
 		validAuth = AuthorizationCopyRights(auth,
 											&rights,
 											kAuthorizationEmptyEnvironment,
-											kAuthorizationFlagPreAuthorize |
+                                            (AuthorizationFlags)
+											(kAuthorizationFlagPreAuthorize |
 											kAuthorizationFlagExtendRights |
-											kAuthorizationFlagInteractionAllowed,
+											kAuthorizationFlagInteractionAllowed),
 											NULL);
 		if (validAuth != errAuthorizationSuccess)
 		{
@@ -92,7 +94,7 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
 
 + (void)performInstallationToPath:(NSString *)destinationPath fromPath:(NSString *)packagePath host:(SUHost *)__unused host versionComparator:(id<SUVersionComparison>)__unused comparator completionHandler:(void (^)(NSError *))completionHandler
 {
-    NSParameterAssert(packagePath);
+    SUParameterAssert(packagePath);
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 
@@ -105,10 +107,13 @@ static BOOL AuthorizationExecuteWithPrivilegesAndWait(AuthorizationRef authoriza
         AuthorizationRef auth = [self authorizationForExecutable:installerPath];
         if (auth != NULL)
         {
+            char pathBuffer[PATH_MAX] = {0};
+            [packagePath getFileSystemRepresentation:pathBuffer maxLength:sizeof(pathBuffer)];
+
             // Permission was granted to execute the installer with privileges
-            const char* const arguments[] = {
+            char * const arguments[] = {
                 "-pkg",
-                [packagePath fileSystemRepresentation],
+                pathBuffer,
                 "-target",
                 "/",
                 NULL

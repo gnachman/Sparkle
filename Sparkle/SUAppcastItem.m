@@ -55,6 +55,11 @@
     return [self.propertiesDictionary[SUAppcastElementTags] containsObject:SUAppcastElementCriticalUpdate];
 }
 
+- (BOOL)isInformationOnlyUpdate
+{
+    return self.infoURL && !self.fileURL;
+}
+
 - (instancetype)initWithDictionary:(NSDictionary *)dict
 {
     return [self initWithDictionary:dict failureReason:nil];
@@ -129,7 +134,8 @@
         }
 
         if (enclosureURLString) {
-            NSString *fileURLString = [[enclosureURLString stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding] stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+            // Sparkle used to always URL-encode, so for backwards compatibility spaces in URLs must be forgiven.
+            NSString *fileURLString = [enclosureURLString stringByReplacingOccurrencesOfString:@" " withString:@"%20"];
             self.fileURL = [NSURL URLWithString:fileURLString];
         }
         if (enclosure) {
@@ -152,8 +158,14 @@
         }
 
         // Find the appropriate release notes URL.
-        if (dict[SUAppcastElementReleaseNotesLink]) {
-            self.releaseNotesURL = [NSURL URLWithString:dict[SUAppcastElementReleaseNotesLink]];
+        NSString *releaseNotesString = dict[SUAppcastElementReleaseNotesLink];
+        if (releaseNotesString) {
+            NSURL *url = [NSURL URLWithString:releaseNotesString];
+            if ([url isFileURL]) {
+                SULog(@"Release notes with file:// URLs are not supported");
+            } else {
+                self.releaseNotesURL = url;
+            }
         } else if ([self.itemDescription hasPrefix:@"http://"] || [self.itemDescription hasPrefix:@"https://"]) { // if the description starts with http:// or https:// use that.
             self.releaseNotesURL = [NSURL URLWithString:self.itemDescription];
         } else {
@@ -164,12 +176,15 @@
         if (deltaDictionaries) {
             NSMutableDictionary *deltas = [NSMutableDictionary dictionary];
             for (NSDictionary *deltaDictionary in deltaDictionaries) {
+                NSString *deltaFrom = deltaDictionary[SUAppcastAttributeDeltaFrom];
+                if (!deltaFrom) continue;
+
                 NSMutableDictionary *fakeAppCastDict = [dict mutableCopy];
                 [fakeAppCastDict removeObjectForKey:SUAppcastElementDeltas];
                 fakeAppCastDict[SURSSElementEnclosure] = deltaDictionary;
-                SUAppcastItem *deltaItem = [[[self class] alloc] initWithDictionary:fakeAppCastDict];
+                SUAppcastItem *deltaItem = [[SUAppcastItem alloc] initWithDictionary:fakeAppCastDict];
 
-                deltas[deltaDictionary[SUAppcastAttributeDeltaFrom]] = deltaItem;
+                deltas[deltaFrom] = deltaItem;
             }
             self.deltaUpdates = deltas;
         }

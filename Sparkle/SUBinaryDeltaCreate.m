@@ -18,6 +18,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/xattr.h>
 #include <xar/xar.h>
 
 extern int bsdiff(int argc, const char **argv);
@@ -98,6 +99,39 @@ static bool aclExists(const FTSENT *ent)
         assert(acl_free((void *)acl) == 0);
         return (result == 0);
     }
+    return false;
+}
+
+static bool codeSignatureExtendedAttributeExists(const FTSENT *ent)
+{
+    const int options = XATTR_NOFOLLOW;
+    ssize_t listSize = listxattr(ent->fts_path, NULL, 0, options);
+    if (listSize == -1) {
+        return false;
+    }
+    
+    char *buffer = malloc((size_t)listSize);
+    assert(buffer != NULL);
+    
+    ssize_t sizeBack = listxattr(ent->fts_path, buffer, (size_t)listSize, options);
+    assert(sizeBack == listSize);
+    
+    size_t startCharacterIndex = 0;
+    for (size_t characterIndex = 0; characterIndex < (size_t)listSize; characterIndex++) {
+        if (buffer[characterIndex] == '\0') {
+            char *attribute = &buffer[startCharacterIndex];
+            size_t length = characterIndex - startCharacterIndex;
+            if (strncmp(APPLE_CODE_SIGN_XATTR_CODE_DIRECTORY_KEY, attribute, length) == 0 ||
+                strncmp(APPLE_CODE_SIGN_XATTR_CODE_REQUIREMENTS_KEY, attribute, length) == 0 ||
+                strncmp(APPLE_CODE_SIGN_XATTR_CODE_SIGNATURE_KEY, attribute, length) == 0) {
+                free(buffer);
+                return true;
+            }
+            startCharacterIndex = characterIndex + 1;
+        }
+    }
+    
+    free(buffer);
     return false;
 }
 
@@ -187,27 +221,32 @@ static BOOL shouldChangePermissions(NSDictionary *originalInfo, NSDictionary *ne
     return YES;
 }
 
-int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFile, SUBinaryDeltaMajorVersion majorVersion, BOOL verbose)
+BOOL createBinaryDelta(NSString *source, NSString *destination, NSString *patchFile, SUBinaryDeltaMajorVersion majorVersion, BOOL verbose, NSError * __autoreleasing *error)
 {
-    if (majorVersion < FIRST_DELTA_DIFF_MAJOR_VERSION) {
-        fprintf(stderr, "Version provided (%u) is not valid\n", majorVersion);
-        return 1;
-    }
-    
-    if (majorVersion > LATEST_DELTA_DIFF_MAJOR_VERSION) {
-        fprintf(stderr, "This program is too old to create a version %u patch, or the version number provided is invalid\n", majorVersion);
-        return 1;
-    }
+    assert(source);
+    assert(destination);
+    assert(patchFile);
+    assert(majorVersion >= FIRST_DELTA_DIFF_MAJOR_VERSION && majorVersion <= LATEST_DELTA_DIFF_MAJOR_VERSION);
     
     SUBinaryDeltaMinorVersion minorVersion = latestMinorVersionForMajorVersion(majorVersion);
     
     NSMutableDictionary *originalTreeState = [NSMutableDictionary dictionary];
 
-    const char *sourcePaths[] = {[source fileSystemRepresentation], 0};
-    FTS *fts = fts_open((char* const*)sourcePaths, FTS_PHYSICAL | FTS_NOCHDIR, compareFiles);
+    char pathBuffer[PATH_MAX] = {0};
+    if (![source getFileSystemRepresentation:pathBuffer maxLength:sizeof(pathBuffer)]) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadInvalidFileNameError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to retrieve file system path representation from source %@", source] }];
+        }
+        return NO;
+    }
+
+    char *sourcePaths[] = {pathBuffer, 0};
+    FTS *fts = fts_open(sourcePaths, FTS_PHYSICAL | FTS_NOCHDIR, compareFiles);
     if (!fts) {
-        perror("fts_open");
-        return 1;
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"fts_open failed on source: %@", @(strerror(errno))] }];
+        }
+        return NO;
     }
 
     if (verbose) {
@@ -228,14 +267,34 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
 
         NSDictionary *info = infoForFile(ent);
         if (!info) {
-            fprintf(stderr, "\nFailed to retrieve info for file %s\n", ent->fts_path);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to retrieve info for file %@", @(ent->fts_path)] }];
+            }
+            return NO;
         }
         originalTreeState[key] = info;
         
         if (aclExists(ent)) {
-            fprintf(stderr, "\nDiffing ACLs are not supported. Detected ACL in before-tree on file %s\n", ent->fts_path);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Diffing ACLs are not supported. Detected ACL in before-tree on file %@", @(ent->fts_path)] }];
+            }
+            return NO;
+        }
+        
+        if (codeSignatureExtendedAttributeExists(ent)) {
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Diffing code signed extended attributes are not supported. Detected extended attribute in before-tree on file %@", @(ent->fts_path)] }];
+            }
+            return NO;
         }
     }
     fts_close(fts);
@@ -243,8 +302,13 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
     NSString *beforeHash = hashOfTreeWithVersion(source, majorVersion);
 
     if (!beforeHash) {
-        fprintf(stderr, "\nFailed to generate hash for tree %s\n", [source fileSystemRepresentation]);
-        return 1;
+        if (verbose) {
+            fprintf(stderr, "\n");
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to generate hash for tree %@", source] }];
+        }
+        return NO;
     }
 
     NSMutableDictionary *newTreeState = [NSMutableDictionary dictionary];
@@ -256,12 +320,25 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
     if (verbose) {
         fprintf(stderr, "\nProcessing %s...", [destination fileSystemRepresentation]);
     }
+
+    pathBuffer[0] = 0;
+    if (![destination getFileSystemRepresentation:pathBuffer maxLength:sizeof(pathBuffer)]) {
+        if (verbose) {
+            fprintf(stderr, "\n");
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadInvalidFileNameError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to retrieve file system path representation from destination %@", destination] }];
+        }
+        return NO;
+    }
     
-    sourcePaths[0] = [destination fileSystemRepresentation];
-    fts = fts_open((char* const*)sourcePaths, FTS_PHYSICAL | FTS_NOCHDIR, compareFiles);
+    sourcePaths[0] = pathBuffer;
+    fts = fts_open(sourcePaths, FTS_PHYSICAL | FTS_NOCHDIR, compareFiles);
     if (!fts) {
-        perror("fts_open");
-        return 1;
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"fts_open failed on destination: %@", @(strerror(errno))] }];
+        }
+        return NO;
     }
 
 
@@ -277,22 +354,50 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
 
         NSDictionary *info = infoForFile(ent);
         if (!info) {
-            fprintf(stderr, "\nFailed to retrieve info from file %s\n", ent->fts_path);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to retrieve info from file %@", @(ent->fts_path)] }];
+            }
+            return NO;
         }
         
         // We should validate permissions and ACLs even if we don't store the info in the diff in the case of ACLs,
         // or in the case of permissions if the patch version is 1
         
+        // We should also not allow files with code signed extended attributes since Apple doesn't recommend inserting these
+        // inside an application, and since we don't preserve extended attribitutes anyway
+        
         mode_t permissions = [info[INFO_PERMISSIONS_KEY] unsignedShortValue];
         if (!IS_VALID_PERMISSIONS(permissions)) {
-            fprintf(stderr, "\nInvalid file permissions after-tree on file %s\nOnly permissions with modes 0755 and 0644 are supported\n", ent->fts_path);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Invalid file permissions after-tree on file %@ (only permissions with modes 0755 and 0644 are supported)", @(ent->fts_path)] }];
+            }
+            return NO;
         }
         
         if (aclExists(ent)) {
-            fprintf(stderr, "\nDiffing ACLs are not supported. Detected ACL in after-tree on file %s\n", ent->fts_path);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Diffing ACLs are not supported. Detected ACL in after-tree on file %@", @(ent->fts_path)] }];
+            }
+            return NO;
+        }
+        
+        if (codeSignatureExtendedAttributeExists(ent)) {
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Diffing code signed extended attributes are not supported. Detected extended attribute in after-tree on file %@", @(ent->fts_path)] }];
+            }
+            return NO;
         }
         
         NSDictionary *oldInfo = originalTreeState[key];
@@ -319,8 +424,13 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
 
     NSString *afterHash = hashOfTreeWithVersion(destination, majorVersion);
     if (!afterHash) {
-        fprintf(stderr, "\nFailed to generate hash for tree %s\n", [destination fileSystemRepresentation]);
-        return 1;
+        if (verbose) {
+            fprintf(stderr, "\n");
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to generate hash for tree %@", destination] }];
+        }
+        return NO;
     }
     
     if (verbose) {
@@ -329,6 +439,16 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
 
     NSString *temporaryFile = temporaryPatchFile(patchFile);
     xar_t x = xar_open([temporaryFile fileSystemRepresentation], WRITE);
+    if (!x) {
+        if (verbose) {
+            fprintf(stderr, "\n");
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to write to %@", temporaryFile] }];
+        }
+        return NO;
+    }
+    
     xar_opt_set(x, XAR_OPT_COMPRESSION, "bzip2");
     
     xar_subdoc_t attributes = xar_subdoc_new(x, BINARY_DELTA_ATTRIBUTES_KEY);
@@ -426,8 +546,13 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
     for (CreateBinaryDeltaOperation *operation in deltaOperations) {
         NSString *resultPath = [operation resultPath];
         if (!resultPath) {
-            fprintf(stderr, "\nFailed to create patch from source %s and destination %s\n", [[operation relativePath] fileSystemRepresentation], [resultPath fileSystemRepresentation]);
-            return 1;
+            if (verbose) {
+                fprintf(stderr, "\n");
+            }
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to create patch from source %@ and destination %@", operation.relativePath, resultPath] }];
+            }
+            return NO;
         }
         
         if (verbose) {
@@ -458,5 +583,5 @@ int createBinaryDelta(NSString *source, NSString *destination, NSString *patchFi
         fprintf(stderr, "\nDone!\n");
     }
 
-    return 0;
+    return YES;
 }

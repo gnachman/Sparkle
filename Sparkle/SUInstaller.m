@@ -16,30 +16,13 @@
 
 @implementation SUInstaller
 
-static NSString *sUpdateFolder = nil;
-
-+ (NSString *)updateFolder
-{
-    return sUpdateFolder;
-}
-
 + (BOOL)isAliasFolderAtPath:(NSString *)path
 {
-    FSRef fileRef;
-    OSStatus err = noErr;
-    Boolean aliasFileFlag = false, folderFlag = false;
-    NSURL *fileURL = [NSURL fileURLWithPath:path];
-
-    if (FALSE == CFURLGetFSRef((CFURLRef)fileURL, &fileRef))
-        err = coreFoundationUnknownErr;
-
-    if (noErr == err)
-        err = FSIsAliasFile(&fileRef, &aliasFileFlag, &folderFlag);
-
-    if (noErr == err)
-        return !!(aliasFileFlag && folderFlag);
-    else
-        return NO;
+    NSNumber *aliasFlag = nil;
+    [[NSURL fileURLWithPath:path] getResourceValue:&aliasFlag forKey:NSURLIsAliasFileKey error:nil];
+    NSNumber *directoryFlag = nil;
+    [[NSURL fileURLWithPath:path] getResourceValue:&directoryFlag forKey:NSURLIsDirectoryKey error:nil];
+    return aliasFlag.boolValue && directoryFlag.boolValue;
 }
 
 // georgen's mod:
@@ -61,8 +44,8 @@ static NSString *sUpdateFolder = nil;
 
 + (NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder alternateBundleFileName:(NSString *)alternateBundleFileName forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr isGuided:(BOOL *)isGuidedPtr
 {
-    NSParameterAssert(inUpdateFolder);
-    NSParameterAssert(host);
+    SUParameterAssert(inUpdateFolder);
+    SUParameterAssert(host);
 
     // Search subdirectories for the application
     NSString *currentFile,
@@ -73,8 +56,6 @@ static NSString *sUpdateFolder = nil;
     NSString *fallbackPackagePath = nil;
     NSDirectoryEnumerator *dirEnum = [[NSFileManager defaultManager] enumeratorAtPath:inUpdateFolder];
     NSString *bundleFileNameNoExtension = [bundleFileName stringByDeletingPathExtension];
-
-    sUpdateFolder = inUpdateFolder;
 
     while ((currentFile = [dirEnum nextObject])) {
         NSString *currentPath = [inUpdateFolder stringByAppendingPathComponent:currentFile];
@@ -100,7 +81,8 @@ static NSString *sUpdateFolder = nil;
         } else {
             // Try matching on bundle identifiers in case the user has changed the name of the host app
             NSBundle *incomingBundle = [NSBundle bundleWithPath:currentPath];
-            if (incomingBundle && [[incomingBundle bundleIdentifier] isEqualToString:[[host bundle] bundleIdentifier]]) {
+            NSString *hostBundleIdentifier = host.bundle.bundleIdentifier;
+            if (incomingBundle && [incomingBundle.bundleIdentifier isEqualToString:hostBundleIdentifier]) {
                 isPackage = NO;
                 newAppDownloadPath = currentPath;
                 break;
@@ -135,13 +117,6 @@ static NSString *sUpdateFolder = nil;
         SULog(@"Searched %@ for %@.(app|pkg)", inUpdateFolder, bundleFileNameNoExtension);
     }
     return newAppDownloadPath;
-}
-
-+ (NSString *)appPathInUpdateFolder:(NSString *)updateFolder forHost:(SUHost *)host
-{
-    BOOL isPackage = NO;
-    NSString *path = [self installSourcePathInUpdateFolder:updateFolder forHost:host isPackage:&isPackage isGuided:nil];
-    return isPackage ? nil : path;
 }
 
 + (void)installFromUpdateFolder:(NSString *)inUpdateFolder overHost:(SUHost *)host installationPath:(NSString *)installationPath versionComparator:(id<SUVersionComparison>)comparator completionHandler:(void (^)(NSError *))completionHandler
