@@ -7,6 +7,7 @@
 //
 
 #import "SUInstaller.h"
+#import "SUConstants.h"
 #import "SUInstallerProtocol.h"
 #import "SUPlainInstaller.h"
 #import "SUPackageInstaller.h"
@@ -29,7 +30,30 @@
     return aliasFlag.boolValue && directoryFlag.boolValue;
 }
 
+// georgen's mod:
+// Wraps the method just below, providing an alternateBundleFileName that comes from user defaults (if available), or from the host's name if not.
+// The original logic always used the host's name.
 + (nullable NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder forHost:(SUHost *)host isPackage:(BOOL *)isPackagePtr isGuided:(nullable BOOL *)isGuidedPtr
+{
+    NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
+    NSString *alternateBundleFileName = [userDefaults stringForKey:SUFeedAlternateAppNameKey];
+    if (!alternateBundleFileName) {
+        alternateBundleFileName = [[host name] stringByAppendingPathExtension:[[host bundlePath] pathExtension]];
+    }
+
+    return [self installSourcePathInUpdateFolder:inUpdateFolder
+                         alternateBundleFileName:alternateBundleFileName
+                                         forHost:host
+                                       isPackage:isPackagePtr
+                                        isGuided:isGuidedPtr];
+}
+
+// Note: This should be similar to upstream but with support for alternateBundleFileName. It has the meat of the code.
++ (nullable NSString *)installSourcePathInUpdateFolder:(NSString *)inUpdateFolder
+                      alternateBundleFileName:(NSString *)alternateBundleFileName
+                                      forHost:(SUHost *)host
+                                    isPackage:(BOOL *)isPackagePtr
+                                     isGuided:(nullable BOOL *)isGuidedPtr
 {
     NSParameterAssert(inUpdateFolder);
     NSParameterAssert(host);
@@ -37,8 +61,7 @@
     // Search subdirectories for the application
     NSString *currentFile,
         *newAppDownloadPath = nil,
-        *bundleFileName = [[host bundlePath] lastPathComponent],
-        *alternateBundleFileName = [[host name] stringByAppendingPathExtension:[[host bundlePath] pathExtension]];
+        *bundleFileName = [[host bundlePath] lastPathComponent];
     BOOL isPackage = NO;
     BOOL isGuided = YES;
     NSString *fallbackPackagePath = nil;
