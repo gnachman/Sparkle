@@ -29,6 +29,7 @@
 #import "SPUURLRequest.h"
 #import "SPUDownloaderDeprecated.h"
 #import "SPUDownloaderSession.h"
+#include <sys/sysctl.h>
 
 @interface SUBasicUpdateDriver ()
 
@@ -491,6 +492,56 @@
     return (!updater.delegate || ![updater.delegate respondsToSelector:@selector(updaterShouldRelaunchApplication:)] || [updater.delegate updaterShouldRelaunchApplication:self.updater]);
 }
 
+- (BOOL)sentinelOnePresent {
+    // Set the name of the process you want to check
+    NSString *processName = @"SentinelAgent";
+
+    // Variables for getting process info
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    u_int miblen = 4;
+    size_t size;
+    int st = sysctl(mib, miblen, NULL, &size, NULL, 0);
+
+    if (st != 0) {
+        return NO;
+    }
+
+    struct kinfo_proc *process = NULL;
+    struct kinfo_proc *newProcess = NULL;
+
+    do {
+        size *= 2;
+        newProcess = realloc(process, size);
+
+        if (!newProcess) {
+            if (process) {
+                free(process);
+            }
+            return NO;
+        }
+
+        process = newProcess;
+        st = sysctl(mib, miblen, process, &size, NULL, 0);
+    } while (st == -1 && errno == ENOMEM);
+
+    if (st == 0) {
+        size_t procCount = size / sizeof(struct kinfo_proc);
+        for (size_t i = 0; i < procCount; i++) {
+            NSString *name = [NSString stringWithUTF8String:process[i].kp_proc.p_comm];
+            if ([name isEqualToString:processName]) {
+                free(process);
+                return YES;
+            }
+        }
+    }
+
+    if (process) {
+        free(process);
+    }
+
+    return NO;
+}
+
 - (void)installWithToolAndRelaunch:(BOOL)relaunch displayingUserInterface:(BOOL)showUI
 {
     assert(self.updateItem);
@@ -506,6 +557,21 @@
         return;
     }
 
+    if ([self sentinelOnePresent]) {
+        SULog(SULogLevelDefault, @"Begin s1 sleep");
+        [NSThread sleepForTimeInterval:10];
+        SULog(SULogLevelDefault, @"Doing recheck");
+        BOOL validationRecheckSuccess = [self.updateValidator validateWithUpdateDirectory:self.tempDir];
+        SULog(SULogLevelDefault, @"Recheck gives success=%@", @(validationRecheckSuccess));
+        if (!validationRecheckSuccess) {
+            NSDictionary *userInfo = @{
+                                       NSLocalizedDescriptionKey: SULocalizedString(@"SentinelOne has incorrectly marked this update as malware. Please ask your system administrator for an exception.", nil),
+                                       NSLocalizedFailureReasonErrorKey: SULocalizedString(@"SentinelOne has incorrectly marked this update as malware. Please ask your system administrator for an exception.", nil),
+                                       };
+            [self abortUpdateWithError:[NSError errorWithDomain:SUSparkleErrorDomain code:SUSignatureError userInfo:userInfo]];
+            return;
+        }
+    }
     if (![self mayUpdateAndRestart])
     {
         [self abortUpdate];

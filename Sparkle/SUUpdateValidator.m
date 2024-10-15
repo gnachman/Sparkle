@@ -15,6 +15,7 @@
 #import "SUSignatures.h"
 
 #include "AppKitPrevention.h"
+#include <sys/sysctl.h>
 
 @interface SUUpdateValidator ()
 
@@ -142,6 +143,7 @@
     BOOL newHasEdDSAKey = newPublicKeys.ed25519PubKey != nil;
     BOOL newHasAnyDSAKey = newHasLegacyDSAKey || newHasEdDSAKey;
     BOOL migratesDSAKeys = oldHasLegacyDSAKey && !oldHasEdDSAKey && newHasEdDSAKey && !newHasLegacyDSAKey;
+    // When SentinelOne deletes the main app binary, updateIsCodeSigned will be NO even if there is a code signature.
     BOOL updateIsCodeSigned = [SUCodeSigningVerifier bundleAtURLIsCodeSigned:newHost.bundle.bundleURL];
     BOOL hostIsCodeSigned = [SUCodeSigningVerifier bundleAtURLIsCodeSigned:host.bundle.bundleURL];
 
@@ -178,6 +180,11 @@
     NSError *error = nil;
     if (passedDSACheck && updateIsCodeSigned && ![SUCodeSigningVerifier codeSignatureIsValidAtBundleURL:newHost.bundle.bundleURL error:&error]) {
         SULog(SULogLevelError, @"The update archive has a valid (Ed)DSA signature, but the app is also signed with Code Signing, which is corrupted: %@. The update will be rejected.", error);
+        return NO;
+    }
+
+    if (hostIsCodeSigned && !updateIsCodeSigned) {
+        SULog(SULogLevelError, @"The original application is code signed but the update does not have a valid signature.");
         return NO;
     }
 
