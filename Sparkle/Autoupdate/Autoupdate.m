@@ -32,8 +32,12 @@ static const NSTimeInterval SUTerminationTimeDelay = 0.5;
  * updateFolderPath - path to update folder (i.e, temporary directory containing the new update)
  * shouldRelaunch - indicates if the new installed app should re-launched
  * shouldShowUI - indicates if we should show the status window when installing the update
+ * suiteName - iTerm2 fork: the suite name (just the value, not the "-suite" flag)
+ *             the host app was launched with, or nil. When non-nil the updated app
+ *             is relaunched with "-suite <suiteName>" so it rejoins the same isolated
+ *             instance. nil means a plain relaunch, exactly as before.
  */
-- (instancetype)initWithHostPath:(NSString *)hostPath relaunchPath:(NSString *)relaunchPath parentProcessId:(pid_t)parentProcessId updateFolderPath:(NSString *)updateFolderPath shouldRelaunch:(BOOL)shouldRelaunch shouldShowUI:(BOOL)shouldShowUI;
+- (instancetype)initWithHostPath:(NSString *)hostPath relaunchPath:(NSString *)relaunchPath parentProcessId:(pid_t)parentProcessId updateFolderPath:(NSString *)updateFolderPath shouldRelaunch:(BOOL)shouldRelaunch shouldShowUI:(BOOL)shouldShowUI suiteName:(NSString *)suiteName;
 
 @end
 
@@ -47,6 +51,8 @@ static const NSTimeInterval SUTerminationTimeDelay = 0.5;
 @property (nonatomic, copy) NSString *relaunchPath;
 @property (nonatomic, assign) BOOL shouldRelaunch;
 @property (nonatomic, assign) BOOL shouldShowUI;
+// iTerm2 fork: the "-suite <name>" the host app was launched with, or nil.
+@property (nonatomic, copy) NSString *suiteName;
 
 @property (nonatomic, assign) BOOL isTerminating;
 
@@ -61,16 +67,18 @@ static const NSTimeInterval SUTerminationTimeDelay = 0.5;
 @synthesize relaunchPath = _relaunchPath;
 @synthesize shouldRelaunch = _shouldRelaunch;
 @synthesize shouldShowUI = _shouldShowUI;
+@synthesize suiteName = _suiteName;
 @synthesize isTerminating = _isTerminating;
 
-- (instancetype)initWithHostPath:(NSString *)hostPath relaunchPath:(NSString *)relaunchPath parentProcessId:(pid_t)parentProcessId updateFolderPath:(NSString *)updateFolderPath shouldRelaunch:(BOOL)shouldRelaunch shouldShowUI:(BOOL)shouldShowUI
+- (instancetype)initWithHostPath:(NSString *)hostPath relaunchPath:(NSString *)relaunchPath parentProcessId:(pid_t)parentProcessId updateFolderPath:(NSString *)updateFolderPath shouldRelaunch:(BOOL)shouldRelaunch shouldShowUI:(BOOL)shouldShowUI suiteName:(NSString *)suiteName
 {
     if (!(self = [super init])) {
         return nil;
     }
-    
+
     self.hostPath = hostPath;
     self.relaunchPath = relaunchPath;
+    self.suiteName = suiteName;
     SULog(SULogLevelDefault, @"PID to listen: %d", parentProcessId);
     self.terminationListener = [[TerminationListener alloc] initWithProcessIdentifier:@(parentProcessId)];
     self.updateFolderPath = updateFolderPath;
@@ -206,21 +214,46 @@ static const NSTimeInterval SUTerminationTimeDelay = 0.5;
         // If that happens, the OS may not make the updated app active and frontmost
         // (Or it does become frontmost, but the OS backgrounds it afterwards.. It's some kind of timing/activation issue that doesn't occur all the time)
         // The only remedy I've been able to find is waiting an arbitrary delay before exiting our application
-        
-        // Don't use -launchApplication: because we may not be launching an application. Eg: it could be a system prefpane
-        if (![[NSWorkspace sharedWorkspace] openFile:relaunchPath]) {
-            SULog(SULogLevelError, @"Failed to launch %@", relaunchPath);
-        }
-        
-        [self.statusController close];
-        
+
         // Don't even think about hiding the app icon from the dock if we've already shown it
         // Transforming the app back to a background one has a backfiring effect, decreasing the likelihood
         // that the updated app will be brought up front
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(SUTerminationTimeDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            cleanupAndExit();
-        });
+        void (^finishRelaunch)(void) = ^{
+            [self.statusController close];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(SUTerminationTimeDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                cleanupAndExit();
+            });
+        };
+
+        if (self.suiteName.length > 0) {
+            // iTerm2 fork: relaunch the updated app with "-suite <name>" so it
+            // rejoins the same isolated instance. This path is only taken when a
+            // suite was passed; the default relaunch below is byte-for-byte
+            // unchanged. We know the target is an application (iTerm2), so passing
+            // launch arguments via NSWorkspace is safe here. createsNewApplicationInstance
+            // forces the arguments to be honored even if LaunchServices still
+            // considers the just-terminated instance registered.
+            NSURL *appURL = [NSURL fileURLWithPath:relaunchPath];
+            NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+            configuration.arguments = @[@"-suite", self.suiteName];
+            configuration.createsNewApplicationInstance = YES;
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL:appURL
+                                                  configuration:configuration
+                                              completionHandler:^(NSRunningApplication *__unused app, NSError *error) {
+                if (error != nil) {
+                    SULog(SULogLevelError, @"Failed to relaunch %@ with suite %@: %@", relaunchPath, self.suiteName, error);
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    finishRelaunch();
+                });
+            }];
+        } else {
+            // Don't use -launchApplication: because we may not be launching an application. Eg: it could be a system prefpane
+            if (![[NSWorkspace sharedWorkspace] openFile:relaunchPath]) {
+                SULog(SULogLevelError, @"Failed to launch %@", relaunchPath);
+            }
+            finishRelaunch();
+        }
     } else {
         cleanupAndExit();
     }
@@ -233,23 +266,31 @@ int main(int __unused argc, const char __unused *argv[])
     @autoreleasepool
     {
         NSArray<NSString *> *args = [[NSProcessInfo processInfo] arguments];
-        if (args.count < 5 || args.count > 7) {
+        // iTerm2 fork: an optional trailing argument carries the suite name (just
+        // the value, not the "-suite" flag) the host app was launched with. This
+        // makes args.count 8 instead of 7 (index 0 is this tool's own path). We
+        // reconstruct the "-suite <name>" pair ourselves when relaunching. Absent
+        // it, arg handling is unchanged.
+        if (args.count < 5 || args.count > 8) {
             return EXIT_FAILURE;
         }
-        
+
         NSApplication *application = [NSApplication sharedApplication];
 
         BOOL shouldShowUI = (args.count > 6) ? [[args objectAtIndex:6] boolValue] : YES;
         if (shouldShowUI) {
             [application activateIgnoringOtherApps:YES];
         }
-        
+
+        NSString *suiteName = (args.count > 7) ? [args objectAtIndex:7] : nil;
+
         AppInstaller *appInstaller = [[AppInstaller alloc] initWithHostPath:[args objectAtIndex:1]
                                                                relaunchPath:[args objectAtIndex:2]
                                                             parentProcessId:[[args objectAtIndex:3] intValue]
                                                            updateFolderPath:[args objectAtIndex:4]
                                                              shouldRelaunch:(args.count > 5) ? [[args objectAtIndex:5] boolValue] : YES
-                                                               shouldShowUI:shouldShowUI];
+                                                               shouldShowUI:shouldShowUI
+                                                                  suiteName:suiteName];
         [application setDelegate:appInstaller];
         [application run];
     }

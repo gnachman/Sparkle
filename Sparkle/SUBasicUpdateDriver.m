@@ -624,12 +624,22 @@
     //Set relaunching flag.
     [self.host setBool:YES forUserDefaultsKey:SUUpdateRelaunchingMarkerKey];
 
-    [NSTask launchedTaskWithLaunchPath:relaunchToolPath arguments:@[[self.host bundlePath],
-                                                                    pathToRelaunch,
-                                                                    [NSString stringWithFormat:@"%d", [[NSProcessInfo processInfo] processIdentifier]],
-                                                                    self.tempDir,
-                                                                    relaunch ? @"1" : @"0",
-                                                                    showUI ? @"1" : @"0"]];
+    NSMutableArray<NSString *> *relaunchArguments = [@[[self.host bundlePath],
+                                                       pathToRelaunch,
+                                                       [NSString stringWithFormat:@"%d", [[NSProcessInfo processInfo] processIdentifier]],
+                                                       self.tempDir,
+                                                       relaunch ? @"1" : @"0",
+                                                       showUI ? @"1" : @"0"] mutableCopy];
+    // iTerm2 fork: forward the "-suite <name>" the app was launched with so the
+    // relaunch tool can relaunch the updated app into the same isolated instance.
+    // The relaunch tool is a fresh process and does not inherit our arguments, so
+    // it must be passed explicitly. Absent a suite (the normal case) the argument
+    // list is unchanged.
+    NSString *suiteName = SUCurrentSuiteName();
+    if (suiteName != nil) {
+        [relaunchArguments addObject:suiteName];
+    }
+    [NSTask launchedTaskWithLaunchPath:relaunchToolPath arguments:relaunchArguments];
     [self terminateApp];
 }
 

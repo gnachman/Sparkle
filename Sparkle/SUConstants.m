@@ -19,6 +19,22 @@
 const NSTimeInterval SUMinimumUpdateCheckInterval = DEBUG ? 60 : (60 * 60);
 const NSTimeInterval SUDefaultUpdateCheckInterval = DEBUG ? 60 : (60 * 60 * 24);
 
+// iTerm2 fork addition. See SUConstants.h. Scans the current process arguments
+// for "-suite <name>" and returns <name>, or nil if absent. Matches how iTerm2
+// itself parses the argument (main.m) so that Sparkle stores its preferences in
+// the same private suite as the isolated test instance.
+NSString * _Nullable SUCurrentSuiteName(void) {
+    NSArray<NSString *> *arguments = [[NSProcessInfo processInfo] arguments];
+    // Stop at count - 1 because the flag requires a following value.
+    for (NSUInteger i = 1; i + 1 < arguments.count; i++) {
+        if ([arguments[i] isEqualToString:@"-suite"]) {
+            NSString *name = arguments[i + 1];
+            return name.length > 0 ? name : nil;
+        }
+    }
+    return nil;
+}
+
 NSString *const SUBundleIdentifier = @SPARKLE_BUNDLE_IDENTIFIER;
 
 NSString *const SUAppcastAttributeValueMacOS = @"macos";

@@ -28,6 +28,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL isMainBundle;
 @property (copy, nullable) NSString *defaultsDomain;
 @property (assign) BOOL usesStandardUserDefaults;
+// The NSUserDefaults instance used when usesStandardUserDefaults is YES. This is
+// [NSUserDefaults standardUserDefaults] normally, but an isolated suite when the
+// process was launched with "-suite <name>" (iTerm2 fork). See SUCurrentSuiteName().
+@property (strong) NSUserDefaults *standardUserDefaultsOrSuite;
 @property (readonly, copy, nullable) NSString *publicDSAKey;
 
 @end
@@ -59,6 +63,19 @@ NS_ASSUME_NONNULL_BEGIN
         // If we're using the main bundle's defaults we'll use the standard user defaults mechanism, otherwise we have to get CF-y.
         NSString *mainBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
         usesStandardUserDefaults = !self.defaultsDomain || [self.defaultsDomain isEqualToString:mainBundleIdentifier];
+
+        // iTerm2 fork: when launched with "-suite <name>", route Sparkle's user
+        // defaults into that private suite so an isolated test instance doesn't
+        // read or clobber the production instance's Sparkle settings. When no
+        // suite is present (the normal case) this is exactly the standard defaults,
+        // so behavior is unchanged. Only the standardUserDefaults path is affected;
+        // the CFPreferences path (a custom SUDefaultsDomain) is left untouched.
+        NSString *suiteName = SUCurrentSuiteName();
+        if (suiteName != nil) {
+            self.standardUserDefaultsOrSuite = [[NSUserDefaults alloc] initWithSuiteName:suiteName];
+        } else {
+            self.standardUserDefaultsOrSuite = [NSUserDefaults standardUserDefaults];
+        }
     }
     return self;
 }
@@ -194,7 +211,7 @@ NS_ASSUME_NONNULL_BEGIN
     // passed into -[NSUserDefaults registerDefaults:] is ignored.  The following line falls
     // back to using NSUserDefaults, but only if the host bundle is the main bundle.
     if (self.usesStandardUserDefaults) {
-        return [[NSUserDefaults standardUserDefaults] objectForKey:defaultName];
+        return [self.standardUserDefaultsOrSuite objectForKey:defaultName];
     }
 
     CFPropertyListRef obj = CFPreferencesCopyAppValue((__bridge CFStringRef)defaultName, (__bridge CFStringRef)self.defaultsDomain);
@@ -206,7 +223,7 @@ NS_ASSUME_NONNULL_BEGIN
 {
 	if (self.usesStandardUserDefaults)
 	{
-        [[NSUserDefaults standardUserDefaults] setObject:value forKey:defaultName];
+        [self.standardUserDefaultsOrSuite setObject:value forKey:defaultName];
 	}
 	else
 	{
@@ -218,7 +235,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)boolForUserDefaultsKey:(NSString *)defaultName
 {
     if (self.usesStandardUserDefaults) {
-        return [[NSUserDefaults standardUserDefaults] boolForKey:defaultName];
+        return [self.standardUserDefaultsOrSuite boolForKey:defaultName];
     }
 
     BOOL value;
@@ -238,7 +255,7 @@ NS_ASSUME_NONNULL_BEGIN
 {
 	if (self.usesStandardUserDefaults)
 	{
-        [[NSUserDefaults standardUserDefaults] setBool:value forKey:defaultName];
+        [self.standardUserDefaultsOrSuite setBool:value forKey:defaultName];
 	}
 	else
 	{

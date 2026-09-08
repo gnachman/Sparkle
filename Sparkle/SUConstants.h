@@ -19,6 +19,13 @@
 extern const NSTimeInterval SUMinimumUpdateCheckInterval;
 extern const NSTimeInterval SUDefaultUpdateCheckInterval;
 
+// iTerm2 fork addition. Returns the value following a "-suite <name>" pair in
+// the current process's arguments, or nil if none is present. iTerm2 launches
+// isolated test instances with "-suite <name>" so their preferences (and
+// Sparkle's) go to a private NSUserDefaults suite instead of the production
+// domain. When nil (the normal case) all Sparkle behavior is unchanged.
+NSString * _Nullable SUCurrentSuiteName(void);
+
 extern NSString *const SUBundleIdentifier;
 
 extern NSString *const SUAppcastAttributeValueMacOS;
